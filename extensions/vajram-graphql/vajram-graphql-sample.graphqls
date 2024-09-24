@@ -1,0 +1,153 @@
+"""Marks a field as the id of an entity"""
+directive @EntityId on FIELD_DEFINITION
+directive @InputVariant on OBJECT
+directive @TypeSpecific(type: String) on FIELD_DEFINITION | OBJECT
+directive @RefFetcher(vajram: String, forwardRef: Boolean) on FIELD_DEFINITION
+directive @DataFetcher(vajram: String) on FIELD_DEFINITION | OBJECT
+"""
+
+Open Items
+1. How do we solve for ID in schema and same ID taken as Input
+
+order(orderId: $orderID)
+
+UnsupportedFeatures
+"""
+type Query {
+    #Single entity at root With input param (ex: DAL)
+
+    #No Ref fetcher needed because Id is coming as param
+    #No Data Fetcher directive needed because its always the ProductAggregator
+    product(fsn: ID): Product
+    #Single entity at root With mandatory input param (ex: DAL)
+    order(orderId: ID!): Order
+
+    #Single entity at root with complex input (ex: VirtualCombo in DAL)
+    combo(comboId: ComboIdInput): VirtualComboProduct
+
+    # Multi entity at root return with input params (Ex: MART)
+    # "GetFilteredPaginatedShipmentIds" inputs: filter, pagination
+    shipments(filter: SellerFiltersInput, pagination: PaginationInput): [Shipment] @RefFetcher(vajram: "GetFilteredPaginatedShipmentIds")
+}
+
+type Shipment {
+    shipmentId: ID,
+
+    # Multi entity within nested Type : no input Params
+    orders: [Order] @RefFetcher(vajram: "GetOrdersFromShipment")
+    filterdOrders(filter:String): [Order] @RefFetcher(vajram: "GetFilteredOrdersFromShipment")
+}
+
+type Order {
+    orderId: ID @EntityId
+
+    address: String @DataFetcher(vajram: "getOrderData")
+    # Nested types forming loops Shipment->Orders & Orders -> Shipments
+    shipments: [Shipment]
+}
+
+input PaginationInput {
+    pageNumber: Int
+    pageSize: Int
+}
+
+input SellerFiltersInput {
+    name: String
+}
+
+"""
+query {
+product {
+listing {
+seller {
+name
+}
+}
+bestListingPrice {
+nep
+fsp
+ftp
+}
+}
+}
+
+"query": {
+"product": {
+"fsn": "P1",
+"listing" : {
+"listingId": "L1"
+}
+}
+}
+"""
+type Product {
+    fsn: ID @EntityId
+    # Nested type but not an Entity
+    title: String @DataFetcher(vajram: "GetProductTitle")
+    images: [Image] @DataFetcher(vajram: "getProductImages")
+    preferredListing: Listing @RefFetcher(vajram: "GetPrefListingId") # Returns ID
+    # Req: Return price which has the min nep among all listings
+    # GetBestPricedListing takes fsn as input and returns a listingID
+    bestListingPrice: ListingPrice @RefFetcher(vajram: "GetBestPricedListingId")
+}
+
+
+type Listing {
+    listingId: ID
+    images: [Image] @DataFetcher(vajram: "GetListingImages")
+    # Non entity type
+    price: ListingPrice @TypeSpecific
+    availability: ListingAvailability @RefFetcher(forwardRef: true)
+}
+# A type
+type ListingPrice @TypeSpecific(type: "Listing")
+        @DataFetcher(vajram: "GetListingPrice"){
+    listingId: ID
+    #Fields within Types coming from different sources
+    # Fetched from API 1
+    ftp: Currency
+    # Fetched from API 2
+    nep: Currency @DataFetcher(vajram: "GetNep")
+    # Fetched from API 3
+    fsp: Currency
+    # Fetched from API 4
+    mrp: Currency
+}
+
+type Currency {
+
+}
+
+type VirtualComboProduct {
+    comboId: ComboId
+}
+
+
+type ComboId @InputVariant{
+    primaryFsn: ID,
+    secondaryFsns: [ID]
+}
+
+input ComboIdInput{
+    primaryFsn: ID,
+    secondaryFsns: [ID]
+}
+
+# Non entity type not Tied to any entity
+type Image {
+    imageUrl: String
+    metadata: [String]
+
+
+}
+
+#Non-Entity Type tied to a single Parent Entity
+type ListingAvailability @TypeSpecific(type: "Listing"){
+    count: Int
+    isAvailable: Boolean
+    xyz: XYZ
+}
+
+type XYZ {
+    abc: String
+}
