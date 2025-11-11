@@ -9,6 +9,7 @@ import com.flipkart.krystal.krystex.kryon.DependentChain;
 import com.flipkart.krystal.vajram.facets.specs.DependencySpec;
 import com.flipkart.krystal.vajramexecutor.krystex.VajramKryonGraph;
 import com.google.common.collect.ImmutableSet;
+import com.squareup.javapoet.ClassName;
 import graphql.com.google.common.collect.ImmutableMap;
 import graphql.execution.ExecutionContext;
 import graphql.normalized.ExecutableNormalizedField;
@@ -21,16 +22,15 @@ public class QueryAnalyseUtil {
   private static final String FIRST_NODE = "QueryGraphQLAggregator";
   public static final String DATA_FETCHER = "dataFetcher";
   public static final String VAJRAM_ID = "vajramId";
-  public static final String REF_FETCHER = "refFetcher";
+  public static final String REF_FETCHER = "idFetcher";
   public static final String ENTITY_FETCHER = "entityFetcher";
-  // New constant for tracking metadata fields
-  public static final String METADATA_FIELDS = "metadataFields";
+
+  public static final String GRAPHQL_AGGREGATOR = "GraphQLAggregator";
 
   static ImmutableSet<DependentChain> getNodeExecutionConfigBasedOnQuery(
       ExecutionContext executionContext,
-      Map<String, Map<String, List<String>>> reverseEntityTypeToFieldResolverMap,
-      Map<String, Map<String, String>> entityToRefToTypeMap,
-      Map<String, Map<String, String>> entityTypeToReferenceFetcher,
+      Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>> entityTypeToFieldToTypeAggregator,
+      Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityTypeToFetcherToFields,
       VajramKryonGraph vajramKryonGraph) {
 
     GraphQLSchema graphQLSchema = executionContext.getGraphQLSchema();
@@ -40,25 +40,11 @@ public class QueryAnalyseUtil {
         executableNormalizedOperation.getCoordinatesToNormalizedFields().asMap();
     Set<VajramID> vajramsToExecute = new HashSet<>();
     Set<DependentChain> dependentChainToSkip = new HashSet<>();
-    String queriedEntity =
-        executionContext.getGraphQLSchema().getQueryType().getName().toUpperCase();
-
-    Set<String> metadataFields = new HashSet<>();
-
-    // Scan for metadata fields at all levels
-    scanForMetadataFields(executableNormalizedOperation.getTopLevelFields(), metadataFields);
-
-    // Store the metadata fields in the context for later use
-    if (!metadataFields.isEmpty()) {
-      executionContext.getGraphQLContext().put(METADATA_FIELDS, metadataFields);
-    }
+    GraphQLTypeName queriedEntity =
+        GraphQLTypeName.of(
+            executionContext.getGraphQLSchema().getQueryType().getName().toUpperCase());
 
     for (FieldCoordinates entry : queriedFields.keySet()) {
-      // Metadata fields have already been handled
-      if (entry.getFieldName().startsWith("__")) {
-        continue;
-      }
-
       GraphQLAppliedDirective graphQLAppliedDirective =
           graphQLSchema.getFieldDefinition(entry).getAppliedDirective(DATA_FETCHER);
 
@@ -80,62 +66,43 @@ public class QueryAnalyseUtil {
         dependentChainToSkip,
         vajramKryonGraph,
         queriedEntity,
-        reverseEntityTypeToFieldResolverMap,
-        entityToRefToTypeMap,
-        entityTypeToReferenceFetcher);
+        entityTypeToFieldToTypeAggregator,
+        entityTypeToFetcherToFields);
     return ImmutableSet.copyOf(dependentChainToSkip);
-  }
-
-  /**
-   * Recursively scan the query for metadata fields like __typename. This ensures we detect them
-   * regardless of their position in the query
-   */
-  private static void scanForMetadataFields(
-      Collection<ExecutableNormalizedField> fields, Set<String> metadataFields) {
-    for (ExecutableNormalizedField field : fields) {
-      if (field.getName().startsWith("__")) {
-        metadataFields.add(field.getName());
-      }
-
-      // Recursively scan child fields
-      if (!field.getChildren().isEmpty()) {
-        scanForMetadataFields(field.getChildren(), metadataFields);
-      }
-    }
   }
 
   private static void setSkipDependentChains(
       Set<VajramID> vajramsToExecute,
       Set<DependentChain> dependentChainToSkip,
       VajramKryonGraph vajramNodeGraph,
-      String queriedEntity,
-      Map<String, Map<String, List<String>>> reverseEntityTypeToFieldResolverMap,
-      Map<String, Map<String, String>> entityToRefToTypeMap,
-      Map<String, Map<String, String>> entityTypeToReferenceFetcher) {
+      GraphQLTypeName queriedEntity,
+      Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>> entityTypeToFieldToTypeAggregator,
+      Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityTypeToFetcherToFields) {
 
     var facetsByName = vajramNodeGraph.getVajramDefinition(vajramID(FIRST_NODE)).facetsByName();
-    for (Map.Entry<String, Map<String, List<String>>> entityToFieldEntry :
-        reverseEntityTypeToFieldResolverMap.entrySet()) {
-      if (queriedEntity.equalsIgnoreCase(entityToFieldEntry.getKey())) {
+
+    for (Map.Entry<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityEntry : entityTypeToFetcherToFields.entrySet()) {
+      GraphQLTypeName entityType = entityEntry.getKey();
+
+      if (queriedEntity.value().equalsIgnoreCase(entityType.value())) {
         List<Dependency> depList = new ArrayList<>();
-        depList.add((Dependency) facetsByName.get(queriedEntity.toLowerCase()));
+        depList.add((Dependency) facetsByName.get(queriedEntity.value().toLowerCase()));
         setSkipDependentChainPerEntity(
             vajramsToExecute,
             dependentChainToSkip,
             vajramNodeGraph,
-            entityToFieldEntry.getKey(),
+            entityType,
             depList,
-            entityToRefToTypeMap,
-            reverseEntityTypeToFieldResolverMap,
-            entityTypeToReferenceFetcher);
+            entityTypeToFieldToTypeAggregator,
+            entityTypeToFetcherToFields);
       } else {
-        for (String fieldTypeDep : entityToFieldEntry.getValue().keySet()) {
+        for (Fetcher fetcher : entityEntry.getValue().keySet()) {
           DependentChain dependentChain =
               vajramNodeGraph.computeDependentChain(
                   FIRST_NODE,
                   (Dependency)
-                      requireNonNull(facetsByName.get(entityToFieldEntry.getKey().toLowerCase())),
-                  (Dependency) requireNonNull(facetsByName.get(fieldTypeDep)));
+                      requireNonNull(facetsByName.get(entityType.value().toLowerCase())),
+                  (Dependency) requireNonNull(facetsByName.get(fetcher.className().simpleName())));
           dependentChainToSkip.add(dependentChain);
         }
       }
@@ -146,13 +113,22 @@ public class QueryAnalyseUtil {
       Set<VajramID> vajramsToExecute,
       Set<DependentChain> dependentChainToSkip,
       VajramKryonGraph vajramNodeGraph,
-      String entity,
+      GraphQLTypeName entityType,
       List<Dependency> dependencyList,
-      Map<String, Map<String, String>> entityToRefToTypeMap,
-      Map<String, Map<String, List<String>>> reverseEntityTypeToFieldResolverMap,
-      Map<String, Map<String, String>> entityTypeToReferenceFetcher) {
-    for (String vajram : reverseEntityTypeToFieldResolverMap.get(entity).keySet()) {
-      if (!vajramsToExecute.contains(vajramID(vajram))) {
+      Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>> entityTypeToFieldToTypeAggregator,
+      Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityTypeToFetcherToFields) {
+
+    Map<Fetcher, List<GraphQlFieldSpec>> fetcherToFieldsMap = entityTypeToFetcherToFields.get(entityType);
+
+    if (fetcherToFieldsMap == null) {
+      return;
+    }
+
+    // Process each fetcher (vajram) for this entity
+    for (Fetcher fetcher : fetcherToFieldsMap.keySet()) {
+      String vajramName = fetcher.className().simpleName();
+
+      if (!vajramsToExecute.contains(vajramID(vajramName))) {
         Dependency mostRecentDependency = null;
         Dependency[] depChain = new Dependency[dependencyList.size()];
         if (dependencyList.size() > 1) {
@@ -164,7 +140,7 @@ public class QueryAnalyseUtil {
         if (mostRecentDependency instanceof DependencySpec<?, ?, ?> dependencySpec) {
           VajramID mostRecentVajram = dependencySpec.onVajramID();
           var facetsByName = vajramNodeGraph.getVajramDefinition(mostRecentVajram).facetsByName();
-          depChain[dependencyList.size() - 1] = (Dependency) facetsByName.get(vajram);
+          depChain[dependencyList.size() - 1] = (Dependency) facetsByName.get(vajramName);
           DependentChain dependentChain =
               vajramNodeGraph.computeDependentChain(FIRST_NODE, dependencyList.get(0), depChain);
           dependentChainToSkip.add(dependentChain);
@@ -179,20 +155,35 @@ public class QueryAnalyseUtil {
       if (mostRecentDependency instanceof DependencySpec<?, ?, ?> dependencySpec) {
         VajramID mostRecentVajram = dependencySpec.onVajramID();
         var facetsByName = vajramNodeGraph.getVajramDefinition(mostRecentVajram).facetsByName();
-        for (Map.Entry<String, String> refFieldVajram :
-            entityTypeToReferenceFetcher.get(entity).entrySet()) {
 
-          List<Dependency> newDepList = new ArrayList<>(dependencyList);
-          newDepList.add((Dependency) facetsByName.get(refFieldVajram.getKey()));
-          setSkipDependentChainPerEntity(
-              vajramsToExecute,
-              dependentChainToSkip,
-              vajramNodeGraph,
-              entityToRefToTypeMap.get(entity).get(refFieldVajram.getKey()).toUpperCase(),
-              newDepList,
-              entityToRefToTypeMap,
-              reverseEntityTypeToFieldResolverMap,
-              entityTypeToReferenceFetcher);
+        Map<GraphQlFieldSpec, ClassName> fieldToTypeAggregatorMap = entityTypeToFieldToTypeAggregator.get(entityType);
+
+        if (fieldToTypeAggregatorMap != null) {
+          for (Map.Entry<GraphQlFieldSpec, ClassName> refFieldEntry : fieldToTypeAggregatorMap.entrySet()) {
+            GraphQlFieldSpec refField = refFieldEntry.getKey();
+            ClassName targetAggregatorClass = refFieldEntry.getValue();
+
+            // Extract target entity name from aggregator class name
+            // e.g., "DummyGraphQLAggregator" -> "DUMMY"
+            String aggregatorName = targetAggregatorClass.simpleName();
+            String targetEntityName = aggregatorName.substring(
+                0,
+                aggregatorName.length() - GRAPHQL_AGGREGATOR.length());
+            GraphQLTypeName targetEntityType = new GraphQLTypeName(targetEntityName.toUpperCase());
+
+            // Build new dependency list for recursive call
+            List<Dependency> newDepList = new ArrayList<>(dependencyList);
+            newDepList.add((Dependency) facetsByName.get(refField.fieldName()));
+
+            setSkipDependentChainPerEntity(
+                vajramsToExecute,
+                dependentChainToSkip,
+                vajramNodeGraph,
+                targetEntityType,
+                newDepList,
+                entityTypeToFieldToTypeAggregator,
+                entityTypeToFetcherToFields);
+          }
         }
       }
     } else {
