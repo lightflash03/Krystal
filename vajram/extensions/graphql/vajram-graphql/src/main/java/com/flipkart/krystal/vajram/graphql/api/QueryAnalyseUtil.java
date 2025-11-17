@@ -97,13 +97,15 @@ public class QueryAnalyseUtil {
             entityTypeToFetcherToFields);
       } else {
         for (Fetcher fetcher : entityEntry.getValue().keySet()) {
-          DependentChain dependentChain =
-              vajramNodeGraph.computeDependentChain(
-                  FIRST_NODE,
-                  (Dependency)
-                      requireNonNull(facetsByName.get(entityType.value().toLowerCase())),
-                  (Dependency) requireNonNull(facetsByName.get(fetcher.className().simpleName())));
-          dependentChainToSkip.add(dependentChain);
+          if (fetcher instanceof VajramFetcher vajramFetcher) {
+            DependentChain dependentChain =
+                vajramNodeGraph.computeDependentChain(
+                    FIRST_NODE,
+                    (Dependency)
+                        requireNonNull(facetsByName.get(entityType.value().toLowerCase())),
+                    (Dependency) requireNonNull(facetsByName.get(vajramFetcher.vajramClassName().simpleName())));
+            dependentChainToSkip.add(dependentChain);
+          }
         }
       }
     }
@@ -126,7 +128,10 @@ public class QueryAnalyseUtil {
 
     // Process each fetcher (vajram) for this entity
     for (Fetcher fetcher : fetcherToFieldsMap.keySet()) {
-      String vajramName = fetcher.className().simpleName();
+      if (!(fetcher instanceof VajramFetcher vajramFetcher)) {
+        continue;
+      }
+      String vajramName = vajramFetcher.vajramClassName().simpleName();
 
       if (!vajramsToExecute.contains(vajramID(vajramName))) {
         Dependency mostRecentDependency = null;
@@ -166,9 +171,7 @@ public class QueryAnalyseUtil {
             // Extract target entity name from aggregator class name
             // e.g., "DummyGraphQLAggregator" -> "DUMMY"
             String aggregatorName = targetAggregatorClass.simpleName();
-            String targetEntityName = aggregatorName.substring(
-                0,
-                aggregatorName.length() - GRAPHQL_AGGREGATOR.length());
+            String targetEntityName = aggregatorName.substring(0, aggregatorName.length() - GRAPHQL_AGGREGATOR.length());
             GraphQLTypeName targetEntityType = new GraphQLTypeName(targetEntityName.toUpperCase());
 
             // Build new dependency list for recursive call

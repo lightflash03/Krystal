@@ -49,21 +49,16 @@ public class VajramExecutionStrategy extends ExecutionStrategy {
   private final InitVajramRequestCreator initVajramRequestCreator;
   private final ExecutionLifecycleListener executionLifecycleListener;
   private final Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>> entityTypeToFieldToTypeAggregator;
-  private final Map<GraphQLTypeName, Map<GraphQlFieldSpec, Fetcher>> entityTypeToFieldToFetcher;
   private final Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityTypeToFetcherToFields;
 
   public VajramExecutionStrategy(
       InitVajramRequestCreator initVajramRequestCreator,
       ExecutionLifecycleListener executionLifecycleListener,
-      Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>>
-          entityTypeToFieldToTypeAggregator,
-      Map<GraphQLTypeName, Map<GraphQlFieldSpec, Fetcher>> entityTypeToFieldToFetcher,
-      Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>>
-          entityTypeToFetcherToFields) {
+      Map<GraphQLTypeName, Map<GraphQlFieldSpec, ClassName>> entityTypeToFieldToTypeAggregator,
+      Map<GraphQLTypeName, Map<Fetcher, List<GraphQlFieldSpec>>> entityTypeToFetcherToFields) {
     this.initVajramRequestCreator = initVajramRequestCreator;
     this.executionLifecycleListener = executionLifecycleListener;
     this.entityTypeToFieldToTypeAggregator = entityTypeToFieldToTypeAggregator;
-    this.entityTypeToFieldToFetcher = entityTypeToFieldToFetcher;
     this.entityTypeToFetcherToFields = entityTypeToFetcherToFields;
   }
 
